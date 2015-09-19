@@ -1,0 +1,62 @@
+#include <STM32F4XX.H>
+#include <STM32F4XX_RCC.H>
+#include <STM32F4XX_RNG.H>
+
+__IO uint32_t TimingDelay;
+
+uint32_t Data;
+uint32_t Result;
+
+char LCD_Buffer[15];
+
+void Delay(__IO uint32_t Time)
+{
+  TimingDelay = Time;
+  while(TimingDelay !=0);
+}
+
+void SysTick_Handler(void)
+{
+  if(TimingDelay !=0)
+  {
+    TimingDelay --;
+   }
+}
+
+int main(void)
+{
+	SystemInit();
+	SysTick_Config(SystemCoreClock/1000);
+
+	PCD8544_GPIO_Configure();
+	PCD8544_Initialise();
+
+	RCC_AHB2PeriphClockCmd(RCC_AHB2Periph_RNG, ENABLE);
+	RNG_Cmd(ENABLE);
+
+	while(1)
+	{
+		Re:
+		while (RNG_GetFlagStatus(RNG_FLAG_DRDY) == RESET);
+		{
+			Data = RNG_GetRandomNumber();
+			Data = Data % 10;
+			if(Data == 0x0000 || Data == 0x0007 || Data == 0x0008 || Data == 0x0009)
+			{
+				goto Re;
+			}
+
+			else
+			{
+				Result = Data % 10;
+			}
+		}
+
+		sprintf(LCD_Buffer, "%d", Result);
+		PCD8544_Write_String(LCD_Buffer);
+
+		Delay(3000);
+		PCD8544_Set_XY(0,0);
+	}
+
+}
