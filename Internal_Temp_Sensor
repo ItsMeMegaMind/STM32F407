@@ -1,0 +1,123 @@
+#include <STM32F4XX.H>
+#include <STM32F4XX_RCC.H>
+#include <STM32F4XX_TIM.H>
+#include <STM32F4XX_ADC.H>
+#include <STM32F4XX_DMA.H>
+#include <STM32F4XX_GPIO.H>
+#include <MISC.H>
+
+#define ADC_Base_Address				0x4001204C
+
+#define Vref							2.9375
+#define Calibration						0
+
+#define Sample_Size       				50
+#define Sample_Frequency 				2000
+#define Timer_Prescaled_Frequency 		100000
+#define Timer_Prescaler					(84000000/Timer_Prescaled_Frequency) - 1
+#define Timer_Period					(Timer_Prescaled_Frequency/Sample_Frequency) - 1
+
+volatile uint16_t 	ADC_Buffer[Sample_Size];
+float	Temperature = 0;
+float 	Temperature_Average = 0;
+
+void Temperature_Timer_Configure()
+{
+	TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStructure;
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
+
+	TIM_TimeBaseInitStructure.TIM_Period        	= Timer_Period;
+	TIM_TimeBaseInitStructure.TIM_Prescaler     	= Timer_Prescaler;
+	TIM_TimeBaseInitStructure.TIM_ClockDivision 	= 0;
+	TIM_TimeBaseInitStructure.TIM_CounterMode   	= TIM_CounterMode_Up;
+	TIM_TimeBaseInit(TIM3, &TIM_TimeBaseInitStructure);
+	TIM_SelectOutputTrigger(TIM3, TIM_TRGOSource_Update);
+	TIM_Cmd(TIM3, ENABLE);
+}
+
+
+void Temperature_DMA_Configure()
+{
+	DMA_InitTypeDef       DMA_InitSturcture;
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_DMA2, ENABLE);
+
+	DMA_InitSturcture.DMA_Channel = DMA_Channel_0;
+	DMA_InitSturcture.DMA_PeripheralBaseAddr 		= ADC_Base_Address;
+	DMA_InitSturcture.DMA_Memory0BaseAddr    		= (uint32_t)&ADC_Buffer[0];
+	DMA_InitSturcture.DMA_DIR                		= DMA_DIR_PeripheralToMemory;
+	DMA_InitSturcture.DMA_BufferSize         		= Sample_Size;
+	DMA_InitSturcture.DMA_PeripheralInc      		= DMA_PeripheralInc_Disable;
+	DMA_InitSturcture.DMA_MemoryInc          		= DMA_MemoryInc_Enable;
+	DMA_InitSturcture.DMA_PeripheralDataSize 		= DMA_PeripheralDataSize_HalfWord;
+	DMA_InitSturcture.DMA_MemoryDataSize     		= DMA_MemoryDataSize_HalfWord;
+	DMA_InitSturcture.DMA_Mode               		= DMA_Mode_Circular;
+	DMA_InitSturcture.DMA_Priority           		= DMA_Priority_High;
+	DMA_InitSturcture.DMA_FIFOMode           		= DMA_FIFOMode_Disable;
+	DMA_InitSturcture.DMA_FIFOThreshold      		= DMA_FIFOThreshold_HalfFull;
+	DMA_InitSturcture.DMA_MemoryBurst        		= DMA_MemoryBurst_Single;
+	DMA_InitSturcture.DMA_PeripheralBurst    		= DMA_PeripheralBurst_Single;
+
+	DMA_Init(DMA2_Stream4, &DMA_InitSturcture);
+	DMA_Cmd(DMA2_Stream4, ENABLE);
+}
+
+void Temperature_ADC_Configure()
+{
+	ADC_InitTypeDef       ADC_InitStructure;
+	ADC_CommonInitTypeDef ADC_CommonInitStructure;
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
+
+	ADC_InitStructure.ADC_Resolution           		= ADC_Resolution_12b;
+	ADC_InitStructure.ADC_ExternalTrigConvEdge 		= ADC_ExternalTrigConvEdge_Rising;
+	ADC_InitStructure.ADC_ExternalTrigConv     		= ADC_ExternalTrigConv_T3_TRGO;
+	ADC_InitStructure.ADC_ScanConvMode         		= DISABLE;
+	ADC_InitStructure.ADC_ContinuousConvMode   		= DISABLE;
+	ADC_InitStructure.ADC_DataAlign            		= ADC_DataAlign_Right;
+	ADC_InitStructure.ADC_NbrOfConversion      		= 1;
+	ADC_Init(ADC1, &ADC_InitStructure);
+
+	ADC_CommonInitStructure.ADC_Mode				= ADC_Mode_Independent;
+	ADC_CommonInitStructure.ADC_Prescaler        	= ADC_Prescaler_Div2;
+	ADC_CommonInitStructure.ADC_DMAAccessMode    	= ADC_DMAAccessMode_Disabled;
+	ADC_CommonInitStructure.ADC_TwoSamplingDelay 	= ADC_TwoSamplingDelay_5Cycles;
+	ADC_CommonInit(&ADC_CommonInitStructure);
+
+	ADC_RegularChannelConfig(ADC1, ADC_Channel_16, 1, ADC_SampleTime_3Cycles);
+	ADC_DMARequestAfterLastTransferCmd(ADC1, ENABLE);
+	ADC_DMACmd(ADC1, ENABLE);
+	ADC_Cmd(ADC1, ENABLE);
+	ADC_TempSensorVrefintCmd(ENABLE);
+}
+
+void Buffer_To_Celsius()
+{
+	uint8_t i = 0;
+
+	Temperature_Average = 0;
+
+	for(i=0;i<Sample_Size;i++)
+	{
+		Temperature_Average = ADC_Buffer[i] + Temperature_Average;
+	}
+
+	Temperature_Average = Temperature_Average/Sample_Size;
+
+	Temperature = ((((Temperature_Average*Vref)/4095) - 0.76)/0.0025) + 25;
+
+	Temperature = Temperature + Calibration;
+}
+
+int main()
+{
+	SystemInit();
+
+	Temperature_Timer_Configure();
+	Temperature_DMA_Configure();
+	Temperature_ADC_Configure();
+
+	while(1)
+	{
+		Buffer_To_Celsius();
+	}
+
+}
