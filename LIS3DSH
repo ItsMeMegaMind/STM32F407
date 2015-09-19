@@ -1,0 +1,168 @@
+#include <STM32F4XX.H>
+#include <STM32F4XX_RCC.H>
+#include <STM32F4XX_SPI.H>
+#include <STM32F4XX_GPIO.H>
+#include <ARM_MATH.H>
+
+#define Sample_Count 100
+
+int8_t MSB_X, LSB_X, MSB_Y, LSB_Y, MSB_Z, LSB_Z;
+
+float Pitch_i = 0,Pitch_f = 0,Roll_i = 0,Roll_f = 0;
+
+float32_t X_Average = 0, Y_Average = 0, Z_Average = 0, X_SD = 0, Y_SD = 0, Z_SD = 0;
+float32_t X_Array[Sample_Count],Y_Array[Sample_Count],Z_Array[Sample_Count];
+
+__IO uint32_t TimingDelay;
+
+void LIS3DSH_GPIO_Configure()
+{
+	 GPIO_InitTypeDef GPIO_InitStructure;
+
+	 RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+	 RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOE , ENABLE);
+
+	 GPIO_InitStructure.GPIO_Pin   = GPIO_Pin_5|GPIO_Pin_6|GPIO_Pin_7;
+	 GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_AF;
+	 GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	 GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	 GPIO_InitStructure.GPIO_PuPd  = GPIO_PuPd_NOPULL;
+	 GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+	 GPIO_InitStructure.GPIO_Pin   = GPIO_Pin_3;
+	 GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_OUT;
+	 GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	 GPIO_InitStructure.GPIO_PuPd  = GPIO_PuPd_UP;
+	 GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	 GPIO_Init(GPIOE, &GPIO_InitStructure);
+
+	 GPIO_PinAFConfig(GPIOA, GPIO_PinSource5, GPIO_AF_SPI1);
+	 GPIO_PinAFConfig(GPIOA, GPIO_PinSource6, GPIO_AF_SPI1);
+	 GPIO_PinAFConfig(GPIOA, GPIO_PinSource7, GPIO_AF_SPI1);
+
+	 GPIO_SetBits(GPIOE, GPIO_Pin_3);
+}
+
+void LIS3DSH_SPI_Configure()
+{
+	SPI_InitTypeDef SPI_InitStructure;
+
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE);
+
+	SPI_InitStructure.SPI_Direction         = SPI_Direction_2Lines_FullDuplex;
+	SPI_InitStructure.SPI_Mode              = SPI_Mode_Master;
+	SPI_InitStructure.SPI_DataSize          = SPI_DataSize_8b;
+	SPI_InitStructure.SPI_CPOL              = SPI_CPOL_High;
+	SPI_InitStructure.SPI_CPHA              = SPI_CPHA_2Edge;
+	SPI_InitStructure.SPI_NSS               = SPI_NSS_Soft | SPI_NSSInternalSoft_Set;
+	SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_256;
+	SPI_InitStructure.SPI_FirstBit          = SPI_FirstBit_MSB;
+	SPI_Init(SPI1, &SPI_InitStructure);
+	SPI_Cmd(SPI1, ENABLE);
+
+	LIS3DSH_SPI_Send(0x20, 0x67);
+	LIS3DSH_SPI_Send(0x24, 0x20);
+}
+
+void LIS3DSH_SPI_Send(uint8_t Address, uint8_t Data)
+{
+	GPIO_ResetBits(GPIOE, GPIO_Pin_3);
+
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+	SPI_I2S_SendData(SPI1, Address);
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_RXNE) == RESET);
+	SPI_I2S_ReceiveData(SPI1);
+
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+	SPI_I2S_SendData(SPI1, Data);
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_RXNE) == RESET);
+	SPI_I2S_ReceiveData(SPI1);
+
+	GPIO_SetBits(GPIOE, GPIO_Pin_3);
+}
+
+uint8_t LIS3DSH_SPI_Read(uint8_t Address)
+{
+	GPIO_ResetBits(GPIOE, GPIO_Pin_3);
+	Address = 0x80|Address;
+
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+	SPI_I2S_SendData(SPI1, Address);
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_RXNE) == RESET);
+	SPI_I2S_ReceiveData(SPI1);
+
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+	SPI_I2S_SendData(SPI1, 0x00);
+	while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_RXNE) == RESET);
+
+	GPIO_SetBits(GPIOE, GPIO_Pin_3);
+
+	return SPI_I2S_ReceiveData(SPI1);
+}
+
+void Delay(__IO uint32_t Time)
+{
+  TimingDelay = Time;
+  while(TimingDelay !=0);
+}
+
+void SysTick_Handler(void)
+{
+  if(TimingDelay !=0)
+  {
+    TimingDelay --;
+   }
+}
+
+void Angle_Conversion()
+{
+	Pitch_f = atan(X_Average/sqrt(pow(Y_Average,2) + pow(Z_Average,2)));
+	Roll_f = atan(Y_Average/sqrt(pow(X_Average,2) + pow(Z_Average,2)));
+
+	Pitch_f = (Pitch_f/3.14159)*180;
+	Roll_f = (Roll_f/3.14159)*180;
+}
+
+int main(void)
+{
+	SystemInit();
+	SysTick_Config(SystemCoreClock/1000000);
+
+	LIS3DSH_GPIO_Configure();
+	LIS3DSH_SPI_Configure();
+
+	UART_GPIO_Configure();
+	UART_Configure();
+
+	uint16_t i = 0;
+
+	while(1)
+	{
+		for(i=0;i<Sample_Count;i++)
+	    {
+			MSB_X = LIS3DSH_SPI_Read(0x29);
+			LSB_X = LIS3DSH_SPI_Read(0x28);
+			MSB_Y = LIS3DSH_SPI_Read(0x2B);
+			LSB_Y = LIS3DSH_SPI_Read(0x2A);
+			MSB_Z = LIS3DSH_SPI_Read(0x2D);
+			LSB_Z = LIS3DSH_SPI_Read(0x2C);
+
+			X_Array[i] = (float32_t)((MSB_X << 8) | (LSB_X));
+			Y_Array[i] = (float32_t)((MSB_Y << 8) | (LSB_Y));
+			Z_Array[i] = (float32_t)((MSB_Z << 8) | (LSB_Z));
+
+			Delay(50);
+	    }
+
+		arm_mean_f32(X_Array, Sample_Count, &X_Average);
+		arm_mean_f32(Y_Array, Sample_Count, &Y_Average);
+		arm_mean_f32(Z_Array, Sample_Count, &Z_Average);
+
+		//arm_std_f32(X_Array, Sample_Count, &X_SD);
+		//arm_std_f32(Y_Array, Sample_Count, &Y_SD);
+		//arm_std_f32(Z_Array, Sample_Count, &Z_SD);
+
+		Angle_Conversion();
+
+	}
+}
